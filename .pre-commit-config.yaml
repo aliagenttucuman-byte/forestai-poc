@@ -1,0 +1,25 @@
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.9.0
+    hooks:
+      - id: ruff
+        args: [--fix]
+      - id: ruff-format
+        files: ^backend/
+
+  - repo: https://github.com/pre-commit/mirrors-mypy
+    rev: v1.14.0
+    hooks:
+      - id: mypy
+        files: ^backend/app/
+        additional_dependencies: [types-all]
+
+  - repo: https://github.com/pre-commit/mirrors-eslint
+    rev: v9.18.0
+    hooks:
+      - id: eslint
+        files: ^frontend/src/.*\.[jt]sx?$
+        additional_dependencies:
+          - eslint@9.18.0
+          - eslint-plugin-react-hooks@5.1.0
+          - eslint-plugin-react-refresh@0.4.0

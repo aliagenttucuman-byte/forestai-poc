@@ -1,0 +1,60 @@
+openapi: 3.0.3
+info:
+  title: Nelson API
+  description: API base del Equipo Nelson
+  version: 0.1.0
+
+servers:
+  - url: http://localhost:8000/api/v1
+    description: Local development
+
+paths:
+  /health:
+    get:
+      tags: [health]
+      summary: Health check
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { type: string }
+                  timestamp: { type: string, format: date-time }
+
+  /auth/login:
+    post:
+      tags: [auth]
+      summary: Login
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                email: { type: string }
+                password: { type: string }
+      responses:
+        "200":
+          description: Token JWT
+
+  /auth/register:
+    post:
+      tags: [auth]
+      summary: Register
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                email: { type: string }
+                password: { type: string }
+                full_name: { type: string }
+      responses:
+        "201":
+          description: User created
