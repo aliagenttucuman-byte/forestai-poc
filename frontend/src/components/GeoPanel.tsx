@@ -327,14 +327,27 @@ function SentinelTab({ lat, lon, radius }: { lat: number; lon: number; radius: n
 
 const ARGENTINA_CENTER = { lat: -38.0, lon: -63.0 };
 
+function loadGeoState() {
+  try {
+    const s = sessionStorage.getItem("geoPanel");
+    if (s) return JSON.parse(s);
+  } catch {}
+  return null;
+}
+
 export default function GeoPanel() {
-  const [lat, setLat] = useState(ARGENTINA_CENTER.lat);
-  const [lon, setLon] = useState(ARGENTINA_CENTER.lon);
-  const [radius, setRadius] = useState(10);
-  const [inputLat, setInputLat] = useState(String(ARGENTINA_CENTER.lat));
-  const [inputLon, setInputLon] = useState(String(ARGENTINA_CENTER.lon));
-  const [activeTab, setActiveTab] = useState<"bosques" | "sentinel">("bosques");
-  const [submitted, setSubmitted] = useState(false);
+  const saved = loadGeoState();
+  const [lat, setLat] = useState(saved?.lat ?? ARGENTINA_CENTER.lat);
+  const [lon, setLon] = useState(saved?.lon ?? ARGENTINA_CENTER.lon);
+  const [radius, setRadius] = useState(saved?.radius ?? 10);
+  const [inputLat, setInputLat] = useState(String(saved?.lat ?? ARGENTINA_CENTER.lat));
+  const [inputLon, setInputLon] = useState(String(saved?.lon ?? ARGENTINA_CENTER.lon));
+  const [activeTab, setActiveTab] = useState<"bosques" | "sentinel">(saved?.tab ?? "bosques");
+  const [submitted, setSubmitted] = useState(saved?.submitted ?? false);
+
+  const persist = (s: { lat: number; lon: number; radius: number; tab: string; submitted: boolean }) => {
+    try { sessionStorage.setItem("geoPanel", JSON.stringify(s)); } catch {}
+  };
 
   const handleConsultar = () => {
     const parsedLat = parseFloat(inputLat);
@@ -343,6 +356,7 @@ export default function GeoPanel() {
     setLat(parsedLat);
     setLon(parsedLon);
     setSubmitted(true);
+    persist({ lat: parsedLat, lon: parsedLon, radius, tab: activeTab, submitted: true });
   };
 
   const tabs = [
@@ -411,6 +425,7 @@ export default function GeoPanel() {
             <button key={z.label} onClick={() => {
               setInputLat(String(z.lat)); setInputLon(String(z.lon));
               setLat(z.lat); setLon(z.lon); setSubmitted(true);
+              persist({ lat: z.lat, lon: z.lon, radius, tab: activeTab, submitted: true });
             }} style={{ padding: "4px 12px", borderRadius: 20, border: "1px solid #e2e8f0",
               background: "white", cursor: "pointer", fontSize: 12, color: "#374151",
               fontWeight: 500 }}>
@@ -424,7 +439,7 @@ export default function GeoPanel() {
       <div style={{ background: "white", borderBottom: "1px solid #e2e8f0",
         padding: "0 28px", display: "flex", gap: 0 }}>
         {tabs.map(t => (
-          <button key={t.key} onClick={() => setActiveTab(t.key)} style={{
+          <button key={t.key} onClick={() => { setActiveTab(t.key); persist({ lat, lon, radius, tab: t.key, submitted }); }} style={{
             padding: "12px 20px", border: "none", background: "none", cursor: "pointer",
             fontWeight: activeTab === t.key ? 700 : 500,
             color: activeTab === t.key ? "#059669" : "#64748b",
