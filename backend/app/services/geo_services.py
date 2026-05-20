@@ -4,6 +4,7 @@ Servicios de datos geoespaciales externos para ForestAI.
 - Sentinel-2 via Copernicus Data Space (CDSE) — NDVI por punto y radio
 - UMSEF/MAyDS — Bosques nativos argentinos vía WFS del MAyDS
 """
+import os
 import httpx
 import math
 from typing import Dict, Any, Optional, List
@@ -44,6 +45,7 @@ def wkt_circle(lat: float, lon: float, radius_km: float, points: int = 32) -> st
 # ---------------------------------------------------------------------------
 
 CDSE_STATS_URL = "https://sh.dataspace.copernicus.eu/api/v1/statistics"
+CDSE_TOKEN_URL = "https://identity.dataspace.copernicus.eu/auth/realms/CDSE/protocol/openid-connect/token"
 
 # Evalscript que calcula NDVI promedio en la zona solicitada
 NDVI_EVALSCRIPT = """
@@ -54,8 +56,7 @@ function setup() {
     output: [
       { id: "ndvi", bands: 1 },
       { id: "dataMask", bands: 1 }
-    ],
-    mosaicking: "ORBIT"
+    ]
   };
 }
 function evaluatePixel(samples) {
@@ -67,6 +68,29 @@ function evaluatePixel(samples) {
 }
 """
 
+async def _get_cdse_token() -> Optional[str]:
+    """Obtiene token OAuth2 de Copernicus Data Space."""
+    user = os.environ.get("CDSE_USER")
+    password = os.environ.get("CDSE_PASSWORD")
+    if not user or not password:
+        return None
+    async with httpx.AsyncClient(timeout=15.0) as client:
+        try:
+            resp = await client.post(
+                CDSE_TOKEN_URL,
+                data={
+                    "grant_type": "password",
+                    "username": user,
+                    "password": password,
+                    "client_id": "cdse-public",
+                },
+                headers={"Content-Type": "application/x-www-form-urlencoded"},
+            )
+            resp.raise_for_status()
+            return resp.json().get("access_token")
+        except Exception:
+            return None
+
 
 async def get_sentinel_ndvi(
     lat: float,
@@ -76,9 +100,8 @@ async def get_sentinel_ndvi(
     """
     Consulta NDVI promedio de Sentinel-2 para un punto y radio dados.
 
-    Usa la Statistical API de Copernicus Data Space — requiere token OAuth2.
-    Si no hay token configurado, devuelve datos de Copernicus WMS como fallback
-    (solo metadatos, sin NDVI calculado).
+    Usa la Statistical API de Copernicus Data Space con OAuth2 (CDSE_USER + CDSE_PASSWORD).
+    Si no hay credenciales configuradas, devuelve solo metadatos sin NDVI.
 
     Retorna dict con:
       - ndvi_mean: promedio NDVI en el área
@@ -87,24 +110,12 @@ async def get_sentinel_ndvi(
       - cloud_coverage: % cobertura de nubes
       - source: "sentinel-2-l2a"
     """
+    from datetime import datetime, timedelta
+
     bbox = bbox_from_point(lat, lon, radius_km)
 
-    # Intentamos con la API pública de estadísticas NDVI de Copernicus
-    # Endpoint alternativo: OGC WMS para obtener la imagen directa
-    # Para PoC usamos el endpoint de Copernicus Browser Stats (público)
-    
-    # Alternativa robusta para PoC: usar el WMS de Copernicus para obtener
-    # el valor de NDVI via GetMap con CRS y bbox
-    wms_url = "https://services.sentinel-hub.com/ogc/wms"
-
-    # Usamos la API pública de estadísticas de Copernicus via su servicio EO Browser
-    # que no requiere autenticación para consultas básicas
-    stats_url = "https://services.sentinel-hub.com/api/v1/statistics"
-
-    # Para el PoC, consultamos el Copernicus Data Space con el endpoint público
-    # de búsqueda de productos para obtener metadatos de la escena más reciente
+    # 1. Buscar imagen más reciente con < 30% nubes (endpoint público, sin auth)
     search_url = "https://catalogue.dataspace.copernicus.eu/odata/v1/Products"
-
     params = {
         "$filter": (
             f"Collection/Name eq 'SENTINEL-2' and "
@@ -115,7 +126,8 @@ async def get_sentinel_ndvi(
             f"{bbox['min_lon']} {bbox['max_lat']},"
             f"{bbox['min_lon']} {bbox['min_lat']}"
             f"))') and "
-            f"Attributes/OData.CSC.DoubleAttribute/any(att:att/Name eq 'cloudCover' and att/OData.CSC.DoubleAttribute/Value lt 30)"
+            f"Attributes/OData.CSC.DoubleAttribute/any("
+            f"att:att/Name eq 'cloudCover' and att/OData.CSC.DoubleAttribute/Value lt 30)"
         ),
         "$orderby": "ContentDate/Start desc",
         "$top": 1,
@@ -128,11 +140,7 @@ async def get_sentinel_ndvi(
             resp.raise_for_status()
             data = resp.json()
         except Exception as e:
-            return {
-                "error": str(e),
-                "source": "sentinel-2",
-                "available": False,
-            }
+            return {"error": str(e), "source": "sentinel-2", "available": False}
 
     products = data.get("value", [])
     if not products:
@@ -152,12 +160,75 @@ async def get_sentinel_ndvi(
     date_str = product.get("ContentDate", {}).get("Start", "")[:10]
     product_name = product.get("Name", "")
 
-    # NDVI estimado: calculamos a partir de quick-look estadístico
-    # Para el PoC devolvemos los metadatos + URL de thumbnail como proxy visual
-    thumbnail_url = f"https://catalogue.dataspace.copernicus.eu/odata/v1/Products({product['Id']})/Nodes({product_name}.SAFE)/Nodes(GRANULE)"
+    # 2. Obtener token OAuth2 y calcular NDVI con Statistical API
+    token = await _get_cdse_token()
+    ndvi_mean = ndvi_min = ndvi_max = None
+    ndvi_error = None
+
+    if token and date_str:
+        # Rango temporal: últimos 30 días desde la imagen encontrada
+        try:
+            d = datetime.fromisoformat(date_str)
+        except Exception:
+            d = datetime.utcnow()
+        time_from = (d - timedelta(days=30)).strftime("%Y-%m-%dT00:00:00Z")
+        time_to = d.strftime("%Y-%m-%dT23:59:59Z")
+
+        stats_payload = {
+            "input": {
+                "bounds": {
+                    "bbox": [bbox["min_lon"], bbox["min_lat"], bbox["max_lon"], bbox["max_lat"]],
+                },
+                "data": [{
+                    "type": "sentinel-2-l2a",
+                    "dataFilter": {"maxCloudCoverage": 30},
+                }],
+            },
+            "aggregation": {
+                "timeRange": {"from": time_from, "to": time_to},
+                "aggregationInterval": {"of": "P30D"},
+                "evalscript": NDVI_EVALSCRIPT,
+                "width": 256,
+                "height": 256,
+            },
+            "calculations": {
+                "ndvi": {
+                    "statistics": {"default": {}},
+                }
+            },
+        }
+
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            try:
+                r = await client.post(
+                    CDSE_STATS_URL,
+                    json=stats_payload,
+                    headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+                )
+                if r.status_code == 200:
+                    result = r.json()
+                    intervals = result.get("data", [])
+                    if intervals:
+                        outputs = intervals[0].get("outputs", {})
+                        stats = outputs.get("ndvi", {}).get("bands", {}).get("B0", {}).get("stats", {})
+                        import math
+                        def _f(v):
+                            if v is None:
+                                return None
+                            fv = float(v)
+                            return round(fv, 3) if math.isfinite(fv) else None
+                        ndvi_mean = _f(stats.get("mean"))
+                        ndvi_min = _f(stats.get("min"))
+                        ndvi_max = _f(stats.get("max"))
+                else:
+                    ndvi_error = f"Statistical API HTTP {r.status_code}: {r.text[:200]}"
+            except Exception as e:
+                ndvi_error = str(e)
 
     return {
-        "ndvi_mean": None,  # Requiere token OAuth2 para calcular NDVI real
+        "ndvi_mean": ndvi_mean,
+        "ndvi_min": ndvi_min,
+        "ndvi_max": ndvi_max,
         "date": date_str,
         "cloud_coverage": round(cloud_cover, 1) if cloud_cover else None,
         "source": "sentinel-2-l2a",
@@ -165,17 +236,12 @@ async def get_sentinel_ndvi(
         "product_name": product_name,
         "product_id": product["Id"],
         "bbox": bbox,
+        "ndvi_error": ndvi_error,
         "message": (
-            f"Imagen Sentinel-2 disponible del {date_str} "
-            f"con {round(cloud_cover,1) if cloud_cover else '?'}% nubes. "
-            f"NDVI calculado requiere autenticación CDSE."
-        ),
-        "cdse_browser_url": (
-            f"https://browser.dataspace.copernicus.eu/?zoom=12"
-            f"&lat={lat}&lng={lon}&themeId=DEFAULT-THEME"
-            f"&visualizationUrl=https://sh.dataspace.copernicus.eu/ogc/wms/YOUR_INSTANCE"
-            f"&datasetId=S2_L2A_CDAS&fromTime={date_str}T00:00:00.000Z"
-            f"&toTime={date_str}T23:59:59.999Z"
+            f"Imagen Sentinel-2 del {date_str} con "
+            f"{round(cloud_cover,1) if cloud_cover else '?'}% nubes. "
+            + (f"NDVI medio: {ndvi_mean}" if ndvi_mean is not None else
+               ("NDVI no disponible: " + (ndvi_error or "sin credenciales")))
         ),
     }
 
