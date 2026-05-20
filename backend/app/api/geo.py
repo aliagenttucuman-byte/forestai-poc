@@ -6,10 +6,12 @@ GET /api/geo/bosques?lat=-26.8&lon=-65.2&radius_km=10
 GET /api/geo/context?lat=-26.8&lon=-65.2&radius_km=10
 """
 from fastapi import APIRouter, Query, HTTPException
+from fastapi.responses import StreamingResponse
 from app.services.geo_services import (
     get_sentinel_ndvi,
     get_bosques_nativos,
     get_geo_context,
+    get_sentinel_preview,
 )
 
 router = APIRouter(prefix="/api/geo", tags=["geo"])
@@ -67,3 +69,24 @@ async def geo_context(
             detail="Coordenadas fuera del territorio argentino."
         )
     return await get_geo_context(lat, lon, radius_km)
+
+
+@router.get("/sentinel/preview")
+async def sentinel_preview(
+    lat: float = Query(...),
+    lon: float = Query(...),
+    radius_km: float = Query(10.0, ge=1.0, le=100.0),
+    layer: str = Query("TRUE_COLOR", description="TRUE_COLOR o NDVI"),
+):
+    """
+    Devuelve imagen PNG de Sentinel-2 para la zona (True Color o NDVI coloreado).
+    Usa Sentinel Hub WMS con auth OAuth2 de CDSE.
+    """
+    img_bytes = await get_sentinel_preview(lat, lon, radius_km, layer)
+    if img_bytes is None:
+        raise HTTPException(status_code=404, detail="No se pudo obtener imagen de Sentinel-2.")
+    return StreamingResponse(
+        iter([img_bytes]),
+        media_type="image/png",
+        headers={"Cache-Control": "public, max-age=3600"},
+    )

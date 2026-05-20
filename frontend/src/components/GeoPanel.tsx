@@ -1,4 +1,4 @@
-import { useState } from "react";
+import React, { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 
 const API_BASE = import.meta.env.VITE_API_URL || "";
@@ -178,6 +178,9 @@ function BosquesTab({ lat, lon, radius }: { lat: number; lon: number; radius: nu
 // ── Solapa Sentinel-2 ─────────────────────────────────────────────────────────
 
 function SentinelTab({ lat, lon, radius }: { lat: number; lon: number; radius: number }) {
+  const [previewLayer, setPreviewLayer] = React.useState<"TRUE_COLOR" | "NDVI">("TRUE_COLOR");
+  const [showPreview, setShowPreview] = React.useState(true);
+
   const { data, isLoading, error } = useQuery<SentinelResult>({
     queryKey: ["sentinel", lat, lon, radius],
     queryFn: async () => {
@@ -188,6 +191,8 @@ function SentinelTab({ lat, lon, radius }: { lat: number; lon: number; radius: n
     enabled: true,
     staleTime: 10 * 60 * 1000,
   });
+
+  const previewUrl = `${API_BASE}/api/geo/sentinel/preview?lat=${lat}&lon=${lon}&radius_km=${radius}&layer=${previewLayer}`;
 
   if (isLoading) return <Spinner />;
   if (error) return (
@@ -220,6 +225,49 @@ function SentinelTab({ lat, lon, radius }: { lat: number; lon: number; radius: n
           </div>
         )}
       </Card>
+
+      {/* Preview de imagen satelital */}
+      {data.available && (
+        <Card>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+            <Label>Vista satelital</Label>
+            <div style={{ display: "flex", gap: 6 }}>
+              {(["TRUE_COLOR", "NDVI"] as const).map(l => (
+                <button key={l} onClick={() => setPreviewLayer(l)}
+                  style={{
+                    fontSize: 11, padding: "3px 10px", borderRadius: 6, border: "none", cursor: "pointer",
+                    background: previewLayer === l ? "#10b981" : "#e2e8f0",
+                    color: previewLayer === l ? "#fff" : "#475569",
+                    fontWeight: previewLayer === l ? 700 : 400,
+                  }}>
+                  {l === "TRUE_COLOR" ? "Color Real" : "NDVI"}
+                </button>
+              ))}
+              <button onClick={() => setShowPreview(p => !p)}
+                style={{ fontSize: 11, padding: "3px 8px", borderRadius: 6, border: "none",
+                  cursor: "pointer", background: "#f1f5f9", color: "#64748b" }}>
+                {showPreview ? "Ocultar" : "Mostrar"}
+              </button>
+            </div>
+          </div>
+          {showPreview && (
+            <div style={{ position: "relative", borderRadius: 10, overflow: "hidden",
+              background: "#e2e8f0", minHeight: 200 }}>
+              <img
+                key={previewUrl}
+                src={previewUrl}
+                alt={`Sentinel-2 ${previewLayer}`}
+                style={{ width: "100%", display: "block", borderRadius: 10 }}
+                onError={e => { (e.target as HTMLImageElement).style.display = "none"; }}
+              />
+              <div style={{ position: "absolute", bottom: 8, left: 8, background: "rgba(0,0,0,0.55)",
+                color: "#fff", fontSize: 10, padding: "2px 8px", borderRadius: 4 }}>
+                Sentinel-2 L2A · {data.date} · {previewLayer === "TRUE_COLOR" ? "Color Real" : "NDVI"}
+              </div>
+            </div>
+          )}
+        </Card>
+      )}
 
       {data.available && (
         <Card>

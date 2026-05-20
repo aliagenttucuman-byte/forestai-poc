@@ -383,9 +383,75 @@ async def get_bosques_nativos(
     }
 
 
-# ---------------------------------------------------------------------------
-# Endpoint combinado
-# ---------------------------------------------------------------------------
+async def get_sentinel_preview(
+    lat: float,
+    lon: float,
+    radius_km: float = 10.0,
+    layer: str = "TRUE_COLOR",
+) -> Optional[bytes]:
+    """
+    Descarga imagen PNG de Sentinel-2 para la zona via Sentinel Hub WMS (CDSE).
+    layer: TRUE_COLOR | NDVI (coloreado verde)
+    Retorna bytes PNG o None si falla.
+    """
+    token = await _get_cdse_token()
+    if not token:
+        return None
+
+    bbox = bbox_from_point(lat, lon, radius_km)
+
+    # Evalscripts por capa
+    evalscripts = {
+        "TRUE_COLOR": """//VERSION=3
+function setup() { return { input: ["B04","B03","B02"], output: { bands: 3 } }; }
+function evaluatePixel(s) {
+  return [3.5*s.B04, 3.5*s.B03, 3.5*s.B02];
+}""",
+        "NDVI": """//VERSION=3
+function setup() { return { input: ["B08","B04"], output: { bands: 3 } }; }
+function evaluatePixel(s) {
+  let ndvi = (s.B08 - s.B04) / (s.B08 + s.B04 + 0.0001);
+  if (ndvi < 0)   return [0.5, 0.5, 0.5];
+  if (ndvi < 0.2) return [0.9, 0.8, 0.2];
+  if (ndvi < 0.4) return [0.5, 0.8, 0.2];
+  if (ndvi < 0.6) return [0.1, 0.6, 0.1];
+  return [0.0, 0.4, 0.0];
+}""",
+    }
+
+    evalscript = evalscripts.get(layer, evalscripts["TRUE_COLOR"])
+
+    payload = {
+        "input": {
+            "bounds": {
+                "bbox": [bbox["min_lon"], bbox["min_lat"], bbox["max_lon"], bbox["max_lat"]],
+            },
+            "data": [{
+                "type": "sentinel-2-l2a",
+                "dataFilter": {"maxCloudCoverage": 30},
+            }],
+        },
+        "output": {
+            "width": 512,
+            "height": 512,
+            "responses": [{"identifier": "default", "format": {"type": "image/png"}}],
+        },
+        "evalscript": evalscript,
+    }
+
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        try:
+            r = await client.post(
+                "https://sh.dataspace.copernicus.eu/api/v1/process",
+                json=payload,
+                headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+            )
+            if r.status_code == 200:
+                return r.content
+            return None
+        except Exception:
+            return None
+
 
 async def get_geo_context(
     lat: float,
