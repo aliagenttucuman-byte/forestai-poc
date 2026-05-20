@@ -451,10 +451,15 @@ export default function GeoPanel() {
               O usá los accesos rápidos para zonas forestales conocidas
             </p>
           </div>
-        ) : activeTab === "bosques" ? (
-          <BosquesTab lat={lat} lon={lon} radius={radius} />
         ) : (
-          <SentinelTab lat={lat} lon={lon} radius={radius} />
+          <>
+            <div style={{ display: activeTab === "bosques" ? "block" : "none" }}>
+              <BosquesTab lat={lat} lon={lon} radius={radius} />
+            </div>
+            <div style={{ display: activeTab === "sentinel" ? "block" : "none" }}>
+              <SentinelTab lat={lat} lon={lon} radius={radius} />
+            </div>
+          </>
         )}
       </div>
     </div>
