@@ -126,6 +126,30 @@ def get_analysis_status(analysis_id: str, db: Session = Depends(get_db)):
     )
 
 
+@router.get("/{analysis_id}/trees")
+def get_trees(analysis_id: str, db: Session = Depends(get_db)):
+    """Retorna lista de árboles para plotear en el mapa."""
+    analysis = db.query(models.Analysis).filter(models.Analysis.id == analysis_id).first()
+    if not analysis:
+        raise HTTPException(status_code=404, detail="Análisis no encontrado")
+
+    trees = db.query(models.Tree).filter(models.Tree.analysis_id == analysis_id).all()
+    return [
+        {
+            "tree_id": t.id,
+            "species": t.species,
+            "lat": t.centroid_lat or 0,
+            "lon": t.centroid_lon or 0,
+            "height_m": t.height_m,
+            "crown_area_m2": t.crown_area_m2,
+            "biomass_kg": t.biomass_kg,
+            "age_years": t.age_years,
+            "confidence": t.confidence,
+        }
+        for t in trees
+    ]
+
+
 @router.get("/{analysis_id}/geojson")
 def get_geojson(analysis_id: str, db: Session = Depends(get_db)):
     analysis = db.query(models.Analysis).filter(models.Analysis.id == analysis_id).first()
@@ -280,3 +304,114 @@ def export_inventory(
             media_type="application/geo+json",
             headers={"Content-Disposition": f"attachment; filename=forestai_{analysis_id[:8]}.geojson"},
         )
+@router.get("/{analysis_id}/bounds")
+def get_bounds(analysis_id: str, db: Session = Depends(get_db)):
+    """Retorna los bounds geográficos del GeoTIFF para superponerlo en el mapa."""
+    analysis = db.query(models.Analysis).filter(models.Analysis.id == analysis_id).first()
+    if not analysis:
+        raise HTTPException(status_code=404, detail="Análisis no encontrado")
+    if not analysis.filepath or not os.path.exists(analysis.filepath):
+        raise HTTPException(status_code=404, detail="Archivo no encontrado")
+    try:
+        import rasterio
+        from rasterio.warp import transform_bounds
+        with rasterio.open(analysis.filepath) as src:
+            bounds = transform_bounds(src.crs, "EPSG:4326", *src.bounds)
+            return {
+                "west": bounds[0], "south": bounds[1],
+                "east": bounds[2], "north": bounds[3],
+                "center_lon": (bounds[0] + bounds[2]) / 2,
+                "center_lat": (bounds[1] + bounds[3]) / 2,
+            }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/{analysis_id}/thumbnail")
+def get_thumbnail(analysis_id: str, db: Session = Depends(get_db)):
+    """Genera un thumbnail PNG del GeoTIFF como previsualización."""
+    analysis = db.query(models.Analysis).filter(models.Analysis.id == analysis_id).first()
+    if not analysis:
+        raise HTTPException(status_code=404, detail="Análisis no encontrado")
+    if not analysis.filepath or not os.path.exists(analysis.filepath):
+        raise HTTPException(status_code=404, detail="Archivo no encontrado")
+
+    try:
+        import numpy as np
+        import rasterio
+        from rasterio.enums import Resampling
+        from PIL import Image
+        import io
+
+        with rasterio.open(analysis.filepath) as src:
+            # Leer a resolución reducida (max 512px)
+            scale = min(512 / src.width, 512 / src.height, 1.0)
+            out_w = max(1, int(src.width * scale))
+            out_h = max(1, int(src.height * scale))
+
+            n_bands = src.count
+            if n_bands >= 3:
+                data = src.read([1, 2, 3], out_shape=(3, out_h, out_w), resampling=Resampling.bilinear)
+                img_arr = np.moveaxis(data, 0, -1).astype(np.float32)
+            else:
+                band = src.read(1, out_shape=(out_h, out_w), resampling=Resampling.bilinear).astype(np.float32)
+                img_arr = np.stack([band, band, band], axis=-1)
+
+            # Normalizar a 0-255
+            p2, p98 = np.percentile(img_arr[img_arr > 0], (2, 98)) if img_arr.max() > 0 else (0, 1)
+            img_arr = np.clip((img_arr - p2) / max(p98 - p2, 1) * 255, 0, 255).astype(np.uint8)
+
+            img = Image.fromarray(img_arr, "RGB")
+            buf = io.BytesIO()
+            img.save(buf, format="PNG", optimize=True)
+            buf.seek(0)
+
+        return StreamingResponse(buf, media_type="image/png", headers={"Cache-Control": "public, max-age=3600"})
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error generando thumbnail: {str(e)}")
+@router.delete("/{analysis_id}", status_code=204)
+def delete_analysis(analysis_id: str, db: Session = Depends(get_db)):
+    """Elimina un análisis y sus árboles."""
+    analysis = db.query(models.Analysis).filter(models.Analysis.id == analysis_id).first()
+    if not analysis:
+        raise HTTPException(status_code=404, detail="Análisis no encontrado")
+    db.query(models.Tree).filter(models.Tree.analysis_id == analysis_id).delete()
+    db.delete(analysis)
+    db.commit()
+    # Intentar borrar archivo si existe
+    if analysis.filepath and os.path.exists(analysis.filepath):
+        try:
+            os.remove(analysis.filepath)
+        except Exception:
+            pass
+
+
+@router.post("/{analysis_id}/reprocess", status_code=202)
+def reprocess_analysis(analysis_id: str, db: Session = Depends(get_db)):
+    """Resetea el análisis y lo vuelve a encolar."""
+    from datetime import datetime
+    analysis = db.query(models.Analysis).filter(models.Analysis.id == analysis_id).first()
+    if not analysis:
+        raise HTTPException(status_code=404, detail="Análisis no encontrado")
+    if not analysis.filepath or not os.path.exists(analysis.filepath):
+        raise HTTPException(status_code=404, detail="Archivo original no encontrado, no se puede reprocesar")
+
+    # Borrar árboles existentes
+    db.query(models.Tree).filter(models.Tree.analysis_id == analysis_id).delete()
+
+    # Resetear estado
+    analysis.status = models.AnalysisStatus.pending
+    analysis.progress = 0
+    analysis.current_step = None
+    analysis.tree_count = None
+    analysis.error = None
+    analysis.completed_at = None
+    db.commit()
+
+    # Relanzar tarea
+    run_analysis.delay(str(analysis_id), analysis.filepath)
+
+    return {"analysis_id": analysis_id, "status": "pending", "message": "Reprocesando..."}
+
+

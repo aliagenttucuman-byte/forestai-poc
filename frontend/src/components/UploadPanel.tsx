@@ -1,60 +1,78 @@
-import { useRef, useState } from "react";
-import { useMutation } from "@tanstack/react-query";
+import { useState, useRef } from "react";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { forestApi } from "../api/client";
 
 interface Props {
-  onUploadSuccess: (analysisId: string) => void;
+  onUploadSuccess: (id: string) => void;
 }
 
 export default function UploadPanel({ onUploadSuccess }: Props) {
-  const inputRef = useRef<HTMLInputElement>(null);
   const [dragging, setDragging] = useState(false);
-  const [name, setName] = useState("");
+  const fileRef = useRef<HTMLInputElement>(null);
+  const qc = useQueryClient();
 
-  const { mutate, isPending, error } = useMutation({
-    mutationFn: ({ file, name }: { file: File; name?: string }) =>
-      forestApi.uploadOrtophoto(file, name || undefined),
+  const { mutate, isPending } = useMutation({
+    mutationFn: async (file: File) => {
+      const form = new FormData();
+      form.append("file", file);
+      form.append("name", file.name.replace(".tif", ""));
+      return forestApi.createAnalysis(form);
+    },
     onSuccess: (data) => {
+      qc.invalidateQueries({ queryKey: ["analyses"] });
       onUploadSuccess(data.analysis_id);
-      setName("");
     },
   });
 
-  const handleFile = (file: File) => {
-    if (!file.name.endsWith(".tif") && !file.name.endsWith(".tiff")) {
-      alert("Solo se aceptan archivos GeoTIFF (.tif / .tiff)");
-      return;
-    }
-    mutate({ file, name });
+  const handle = (file: File) => {
+    if (file.name.endsWith(".tif") || file.name.endsWith(".tiff")) mutate(file);
   };
 
   return (
-    <div className="flex items-center gap-3">
+    <>
       <input
-        type="text"
-        placeholder="Nombre del análisis (opcional)"
-        value={name}
-        onChange={(e) => setName(e.target.value)}
-        className="text-sm bg-gray-800 border border-gray-700 rounded-lg px-3 py-1.5 text-white placeholder-gray-500 w-48 focus:outline-none focus:border-green-500"
-      />
-      <button
-        onClick={() => inputRef.current?.click()}
-        disabled={isPending}
-        className="flex items-center gap-2 bg-green-600 hover:bg-green-500 disabled:opacity-50 text-white text-sm font-medium px-4 py-1.5 rounded-lg transition-colors"
-      >
-        {isPending ? (
-          <><span className="animate-spin">⚙️</span> Analizando...</>
-        ) : (
-          <><span>📡</span> Subir ortofoto</>
-        )}
-      </button>
-      <input
-        ref={inputRef}
+        ref={fileRef}
         type="file"
         accept=".tif,.tiff"
         className="hidden"
-        onChange={(e) => { const f = e.target.files?.[0]; if (f) handleFile(f); }}
+        onChange={(e) => e.target.files?.[0] && handle(e.target.files[0])}
       />
-    </div>
+      <button
+        onClick={() => fileRef.current?.click()}
+        disabled={isPending}
+        onDragOver={(e) => { e.preventDefault(); setDragging(true); }}
+        onDragLeave={() => setDragging(false)}
+        onDrop={(e) => {
+          e.preventDefault();
+          setDragging(false);
+          const f = e.dataTransfer.files[0];
+          if (f) handle(f);
+        }}
+        className={`
+          flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-semibold
+          transition-all duration-200 border
+          ${dragging
+            ? "bg-green-500/20 border-green-400 text-green-300"
+            : isPending
+              ? "bg-green-900/30 border-green-800 text-green-500 cursor-not-allowed"
+              : "bg-green-600 hover:bg-green-500 border-green-500 text-white glow-green hover:shadow-lg"
+          }
+        `}
+      >
+        {isPending ? (
+          <>
+            <span className="w-4 h-4 border-2 border-green-400 border-t-transparent rounded-full animate-spin" />
+            Procesando...
+          </>
+        ) : (
+          <>
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
+            </svg>
+            Subir ortofoto
+          </>
+        )}
+      </button>
+    </>
   );
 }

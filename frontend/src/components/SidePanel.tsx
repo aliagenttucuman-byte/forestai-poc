@@ -1,129 +1,107 @@
 import { useQuery } from "@tanstack/react-query";
-import { forestApi } from "../api/client";
-import { useForestStore } from "../store/useForestStore";
+import { forestApi, type Analysis } from "../api/client";
 
-interface Props { analysisId: string; }
+interface Props {
+  selectedId: string | null;
+  onSelect: (id: string) => void;
+}
 
-export default function SidePanel({ analysisId }: Props) {
-  const { selectedTreeId } = useForestStore();
+const statusConfig = {
+  pending:    { label: "Pendiente",   dot: "bg-yellow-400 forest-pulse", text: "text-yellow-400" },
+  processing: { label: "Procesando",  dot: "bg-blue-400 forest-pulse",   text: "text-blue-400"   },
+  completed:  { label: "Completado",  dot: "bg-green-400",               text: "text-green-400"  },
+  failed:     { label: "Error",       dot: "bg-red-400",                 text: "text-red-400"    },
+};
 
-  const { data: status } = useQuery({
-    queryKey: ["status", analysisId],
-    queryFn: () => forestApi.getStatus(analysisId),
-    refetchInterval: (q) => (q.state.data?.status === "processing" || q.state.data?.status === "pending") ? 2000 : false,
+export default function SidePanel({ selectedId, onSelect }: Props) {
+  const { data, isLoading } = useQuery({
+    queryKey: ["analyses"],
+    queryFn: forestApi.listAnalyses,
+    refetchInterval: 4000,
   });
 
-  const { data: summary } = useQuery({
-    queryKey: ["summary", analysisId],
-    queryFn: () => forestApi.getSummary(analysisId),
-    enabled: status?.status === "completed",
-  });
-
-  const exportCSV = () => window.open(forestApi.exportCSV(analysisId), "_blank");
-  const exportGeoJSON = () => window.open(forestApi.exportGeoJSON(analysisId), "_blank");
+  const analyses: Analysis[] = data?.items || [];
 
   return (
-    <div className="p-4 space-y-4 text-sm">
-      {/* Estado del análisis */}
-      <div className="bg-gray-800 rounded-xl p-4 space-y-2">
-        <h3 className="font-semibold text-gray-200">Estado del análisis</h3>
-        {status ? (
-          <>
-            <div className="flex items-center gap-2">
-              <StatusBadge status={status.status} />
-              {status.tree_count && (
-                <span className="text-green-400 font-bold">{status.tree_count} árboles</span>
-              )}
-            </div>
-            {(status.status === "processing" || status.status === "pending") && (
-              <div className="space-y-1">
-                <div className="w-full bg-gray-700 rounded-full h-2">
-                  <div
-                    className="bg-green-500 h-2 rounded-full transition-all duration-500"
-                    style={{ width: `${status.progress}%` }}
-                  />
-                </div>
-                <p className="text-xs text-gray-400">{status.current_step}</p>
-              </div>
-            )}
-            {status.error && <p className="text-xs text-red-400">{status.error}</p>}
-          </>
+    <aside className="w-72 flex flex-col overflow-hidden" style={{ background: "#0f1710", borderRight: "1px solid #1e2d22" }}>
+      {/* Header sidebar */}
+      <div className="px-4 py-4" style={{ borderBottom: "1px solid #1e2d22" }}>
+        <p className="text-xs font-semibold uppercase tracking-widest" style={{ color: "#4ade80" }}>
+          Análisis
+        </p>
+        <p className="text-xs mt-0.5" style={{ color: "#6b7280" }}>
+          {analyses.length} ortofoto{analyses.length !== 1 ? "s" : ""} cargada{analyses.length !== 1 ? "s" : ""}
+        </p>
+      </div>
+
+      {/* Lista */}
+      <div className="flex-1 overflow-y-auto py-2">
+        {isLoading ? (
+          <div className="px-4 py-8 text-center">
+            <div className="w-6 h-6 border-2 border-green-500 border-t-transparent rounded-full animate-spin mx-auto mb-2" />
+            <p className="text-xs" style={{ color: "#6b7280" }}>Cargando...</p>
+          </div>
+        ) : analyses.length === 0 ? (
+          <div className="px-4 py-8 text-center">
+            <div className="text-4xl mb-3">🌲</div>
+            <p className="text-sm font-medium" style={{ color: "#9ca3af" }}>Sin análisis</p>
+            <p className="text-xs mt-1" style={{ color: "#4b5563" }}>Subí una ortofoto para comenzar</p>
+          </div>
         ) : (
-          <p className="text-gray-500">Cargando...</p>
+          analyses.map((a) => {
+            const st = statusConfig[a.status as keyof typeof statusConfig] || statusConfig.pending;
+            const isSelected = a.analysis_id === selectedId;
+            return (
+              <button
+                key={a.analysis_id}
+                onClick={() => onSelect(a.analysis_id)}
+                className="w-full text-left px-4 py-3 card-hover transition-all"
+                style={{
+                  background: isSelected ? "#1e2d22" : "transparent",
+                  borderLeft: isSelected ? "3px solid #4ade80" : "3px solid transparent",
+                }}
+              >
+                {/* Nombre */}
+                <p className="text-sm font-medium truncate" style={{ color: isSelected ? "#4ade80" : "#e2e8f0" }}>
+                  {a.name || a.filename}
+                </p>
+                {/* Status row */}
+                <div className="flex items-center gap-1.5 mt-1">
+                  <span className={`w-1.5 h-1.5 rounded-full ${st.dot}`} />
+                  <span className={`text-xs ${st.text}`}>{st.label}</span>
+                  {a.status === "completed" && a.tree_count !== undefined && (
+                    <span className="ml-auto text-xs font-semibold" style={{ color: "#4ade80" }}>
+                      {a.tree_count} árboles
+                    </span>
+                  )}
+                </div>
+                {/* Filename */}
+                <p className="text-xs mt-0.5 truncate" style={{ color: "#4b5563" }}>{a.filename}</p>
+              </button>
+            );
+          })
         )}
       </div>
 
-      {/* Resumen del inventario */}
-      {summary && (
-        <div className="bg-gray-800 rounded-xl p-4 space-y-3">
-          <h3 className="font-semibold text-gray-200">Inventario</h3>
+      {/* Stats footer */}
+      {analyses.filter(a => a.status === "completed").length > 0 && (
+        <div className="px-4 py-3" style={{ borderTop: "1px solid #1e2d22" }}>
           <div className="grid grid-cols-2 gap-2">
-            <Stat label="Árboles totales" value={summary.total_trees.toString()} />
-            <Stat label="Biomasa total" value={`${summary.total_biomass_tons} t`} />
-            <Stat label="Área copa" value={`${summary.total_crown_area_ha} ha`} />
-            <Stat label="Altura media" value={`${summary.average_height_m} m`} />
-            <Stat label="Edad media" value={`${summary.average_age_years} años`} />
-          </div>
-
-          {/* Distribución por especie */}
-          <div className="space-y-2 pt-2 border-t border-gray-700">
-            <p className="text-xs text-gray-400 font-medium">Por especie</p>
-            {summary.species_distribution.map((sp) => (
-              <div key={sp.species} className="space-y-0.5">
-                <div className="flex justify-between text-xs">
-                  <span className="capitalize text-gray-300">{sp.species}</span>
-                  <span className="text-gray-400">{sp.count} ({sp.percentage}%)</span>
-                </div>
-                <div className="w-full bg-gray-700 rounded-full h-1.5">
-                  <div
-                    className="bg-green-500 h-1.5 rounded-full"
-                    style={{ width: `${sp.percentage}%` }}
-                  />
-                </div>
-              </div>
-            ))}
-          </div>
-
-          {/* Exportar */}
-          <div className="flex gap-2 pt-2 border-t border-gray-700">
-            <button
-              onClick={exportCSV}
-              className="flex-1 bg-gray-700 hover:bg-gray-600 text-xs py-1.5 rounded-lg transition-colors"
-            >
-              📥 CSV
-            </button>
-            <button
-              onClick={exportGeoJSON}
-              className="flex-1 bg-gray-700 hover:bg-gray-600 text-xs py-1.5 rounded-lg transition-colors"
-            >
-              🗺️ GeoJSON
-            </button>
+            <div className="rounded-lg p-2" style={{ background: "#162018" }}>
+              <p className="text-xs" style={{ color: "#6b7280" }}>Completados</p>
+              <p className="text-lg font-bold" style={{ color: "#4ade80" }}>
+                {analyses.filter(a => a.status === "completed").length}
+              </p>
+            </div>
+            <div className="rounded-lg p-2" style={{ background: "#162018" }}>
+              <p className="text-xs" style={{ color: "#6b7280" }}>Total árboles</p>
+              <p className="text-lg font-bold" style={{ color: "#4ade80" }}>
+                {analyses.filter(a => a.status === "completed").reduce((s, a) => s + (a.tree_count || 0), 0)}
+              </p>
+            </div>
           </div>
         </div>
       )}
-    </div>
-  );
-}
-
-function Stat({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="bg-gray-900 rounded-lg p-2 text-center">
-      <p className="text-xs text-gray-500">{label}</p>
-      <p className="text-sm font-bold text-white">{value}</p>
-    </div>
-  );
-}
-
-function StatusBadge({ status }: { status: string }) {
-  const colors: Record<string, string> = {
-    pending: "bg-yellow-900 text-yellow-300",
-    processing: "bg-blue-900 text-blue-300",
-    completed: "bg-green-900 text-green-300",
-    failed: "bg-red-900 text-red-300",
-  };
-  return (
-    <span className={`text-xs px-2 py-0.5 rounded-full ${colors[status] || "bg-gray-700"}`}>
-      {status}
-    </span>
+    </aside>
   );
 }

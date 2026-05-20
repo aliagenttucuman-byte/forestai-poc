@@ -1,7 +1,2 @@
-import { http, HttpResponse } from 'msw';
-
-export const handlers = [
-  http.get('/api/v1/health', () => {
-    return HttpResponse.json({ status: 'ok' });
-  }),
-];
+// MSW handlers — vacío por ahora en la PoC
+export const handlers: unknown[] = [];

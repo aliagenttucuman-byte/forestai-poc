@@ -27,30 +27,50 @@ def load_raster(filepath: str) -> Dict[str, Any]:
     Carga el GeoTIFF y reproyecta a EPSG:4326 si es necesario.
     Retorna dict con array RGB, transform, crs, bounds.
     """
+    MAX_DIM = 6000  # máx 6000px por lado para no reventar RAM
+
     with rasterio.open(filepath) as src:
-        # Leer las 3 bandas RGB
+        orig_w, orig_h = src.width, src.height
+        scale = min(MAX_DIM / orig_w, MAX_DIM / orig_h, 1.0)
+
+        out_w = max(1, int(orig_w * scale))
+        out_h = max(1, int(orig_h * scale))
+
+        # Leer las 3 bandas RGB con resampling si es necesario
         if src.count >= 3:
-            r = src.read(1).astype(np.float32)
-            g = src.read(2).astype(np.float32)
-            b = src.read(3).astype(np.float32)
+            r = src.read(1, out_shape=(out_h, out_w), resampling=Resampling.average).astype(np.float32)
+            g = src.read(2, out_shape=(out_h, out_w), resampling=Resampling.average).astype(np.float32)
+            b = src.read(3, out_shape=(out_h, out_w), resampling=Resampling.average).astype(np.float32)
         else:
-            # Grayscale → triplicar
-            gray = src.read(1).astype(np.float32)
+            gray = src.read(1, out_shape=(out_h, out_w), resampling=Resampling.average).astype(np.float32)
             r = g = b = gray
 
         crs = src.crs
-        transform = src.transform
         bounds = src.bounds
-        resolution = abs(src.transform.e)  # metros por pixel
+
+        # Recalcular transform ajustado al nuevo tamaño
+        from rasterio.transform import from_bounds
+        transform = from_bounds(bounds.left, bounds.bottom, bounds.right, bounds.top, out_w, out_h)
+
+        # Resolución en metros por píxel (basada en tamaño real del bounds)
+        width_m = bounds.right - bounds.left
+        height_m_geo = bounds.top - bounds.bottom
+
+        if crs and crs.is_geographic:
+            center_lat = (bounds.top + bounds.bottom) / 2
+            width_m = width_m * 111319 * math.cos(math.radians(center_lat))
+            height_m_geo = height_m_geo * 111319
+
+        resolution_m = (width_m / out_w + height_m_geo / out_h) / 2
 
         return {
             "r": r, "g": g, "b": b,
             "crs": crs,
             "transform": transform,
             "bounds": bounds,
-            "resolution_m": resolution,
-            "width": src.width,
-            "height": src.height,
+            "resolution_m": resolution_m,
+            "width": out_w,
+            "height": out_h,
         }
 
 
@@ -82,8 +102,16 @@ def segment_crowns(raster: Dict[str, Any]) -> List[Dict[str, Any]]:
     vari = np.clip(vari, -1, 1)
     vari_norm = ((vari + 1) / 2 * 255).astype(np.uint8)
 
-    # Umbral de vegetación
-    _, thresh = cv2.threshold(vari_norm, 100, 255, cv2.THRESH_BINARY)
+    # Umbral adaptativo de vegetación usando Otsu sobre VARI
+    # Esto funciona aunque toda la imagen sea "verde" — encuentra la separación natural
+    otsu_thresh, thresh = cv2.threshold(vari_norm, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+
+    # Si Otsu deja más del 90% como vegetación, usar percentil 40 como umbral
+    # Percentil más bajo = más selectivo = mejor separación árboles vs pasto denso
+    veg_fraction = thresh.sum() / (255 * thresh.size)
+    if veg_fraction > 0.90:
+        percentile_thresh = int(np.percentile(vari_norm, 40))
+        _, thresh = cv2.threshold(vari_norm, percentile_thresh, 255, cv2.THRESH_BINARY)
 
     # Limpieza morfológica
     kernel = np.ones((3, 3), np.uint8)
@@ -92,7 +120,11 @@ def segment_crowns(raster: Dict[str, Any]) -> List[Dict[str, Any]]:
 
     # Distance transform para separar árboles
     dist_transform = cv2.distanceTransform(thresh, cv2.DIST_L2, 5)
-    _, sure_fg = cv2.threshold(dist_transform, 0.4 * dist_transform.max(), 255, 0)
+    # Factor fijo: 0.40 es el punto de equilibrio entre separar árboles tocantes
+    # y no perder árboles pequeños. No varía por densidad de verde — eso causaba
+    # que en silvopastoral (mucho pasto verde) se detectaran menos árboles.
+    dt_factor = 0.40
+    _, sure_fg = cv2.threshold(dist_transform, dt_factor * dist_transform.max(), 255, 0)
     sure_fg = sure_fg.astype(np.uint8)
 
     # Watershed
@@ -106,7 +138,10 @@ def segment_crowns(raster: Dict[str, Any]) -> List[Dict[str, Any]]:
     markers_ws = markers.copy()
     cv2.watershed(img_rgb, markers_ws)
 
-    # Extraer contornos por región
+    # Resolución para convertir px² → m²
+    resolution_check = raster["resolution_m"]
+
+    # Extraer contornos por región con filtros de árbol vs pasto
     crowns = []
     unique_labels = np.unique(markers_ws)
 
@@ -123,23 +158,41 @@ def segment_crowns(raster: Dict[str, Any]) -> List[Dict[str, Any]]:
         cnt = max(contours, key=cv2.contourArea)
         area_px = cv2.contourArea(cnt)
 
-        # Filtrar regiones muy pequeñas o muy grandes (ruido)
-        min_area_px = 15
-        max_area_px = raster["width"] * raster["height"] * 0.15  # máx 15% de la imagen
-        if area_px < min_area_px or area_px > max_area_px:
+        # --- Filtro 1: Área en m² (INTA: copa mín 2m², máx 80m²) ---
+        area_m2_check = area_px * (resolution_check ** 2)
+        if area_m2_check < 2.0 or area_m2_check > 80.0:
             continue
 
-        # Métricas de color en la región
+        # --- Filtro 2: Circularidad ---
+        # Árbol visto desde arriba ≈ círculo (copa redonda).
+        # Pasto y arbustos rastreros son elongados o muy irregulares.
+        # Circularidad = 4π * área / perímetro² → 1.0 es círculo perfecto
+        # Umbral: > 0.15 — permisivo para copas asimétricas pero rechaza manchas largas
+        perimeter = cv2.arcLength(cnt, True)
+        if perimeter < 1:
+            continue
+        circularity = (4 * math.pi * area_px) / (perimeter ** 2)
+        if circularity < 0.15:
+            continue
+
+        # Filtro de textura removido — demasiado restrictivo para copas irregulares.
+        # Solo se usa circularity como filtro de forma.
         mask_bool = mask > 0
+        g_vals_local = g[mask_bool]
+        if len(g_vals_local) < 4:
+            continue
+        local_variance = float(np.var(g_vals_local))
+
         r_vals = r[mask_bool]
-        g_vals = g[mask_bool]
         b_vals = b[mask_bool]
 
         crowns.append({
             "contour": cnt,
             "area_px": area_px,
+            "circularity": round(circularity, 3),
+            "local_variance": round(local_variance, 1),
             "r_mean": float(np.mean(r_vals)),
-            "g_mean": float(np.mean(g_vals)),
+            "g_mean": float(np.mean(g_vals_local)),
             "b_mean": float(np.mean(b_vals)),
         })
 
@@ -215,9 +268,11 @@ def analyze_ortophoto(filepath: str, progress_callback: Callable = None) -> List
 
         # Altura estimada desde el radio de la copa
         # Relación empírica: height ≈ 2.5 * sqrt(area_m2 / pi)
+        # Caps realistas INTA: mín 1m, máx 16m (árbol forestal adulto Argentina)
+        # Con copa máx 80m²: radio=5m, altura=2.5*5=12.5m (razonable para adulto)
         radius_m = math.sqrt(area_m2 / math.pi)
         height_m = round(2.5 * radius_m, 2)
-        height_m = max(height_m, 1.0)
+        height_m = max(1.0, min(height_m, 16.0))
 
         # Textura
         texture = compute_texture(contour, raster)

@@ -1,15 +1,18 @@
 FROM python:3.11-slim
 
-# Dependencias del sistema para rasterio, gdal, opencv
+# Dependencias del sistema mínimas
+# rasterio instala su propio GDAL via wheels binarios → no necesitamos libgdal-dev
 RUN apt-get update && apt-get install -y \
-    gdal-bin libgdal-dev gcc g++ python3-dev \
-    libgl1-mesa-glx libglib2.0-0 \
+    gcc g++ python3-dev \
+    libglib2.0-0 libgl1 \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
+# Instalar primero las dependencias pesadas para aprovechar caché de Docker
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir --upgrade pip && \
+    pip install --no-cache-dir -r requirements.txt
 
 COPY . .
 
