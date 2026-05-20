@@ -41,6 +41,10 @@ interface SentinelResult {
   message?: string;
   error?: string;
   bbox?: BBox;
+  ndvi_mean?: number | null;
+  ndvi_min?: number | null;
+  ndvi_max?: number | null;
+  ndvi_error?: string | null;
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -226,26 +230,43 @@ function SentinelTab({ lat, lon, radius }: { lat: number; lon: number; radius: n
         </Card>
       )}
 
-      <Card style={{ background: "#fffbeb", border: "1px solid #fde68a" }}>
-        <div style={{ display: "flex", gap: 10 }}>
-          <span style={{ fontSize: 18 }}>💡</span>
-          <div>
-            <p style={{ fontSize: 13, fontWeight: 600, color: "#92400e", marginBottom: 6 }}>
-              NDVI requiere autenticación
-            </p>
-            <p style={{ fontSize: 12, color: "#78350f" }}>
-              El cálculo de NDVI real sobre la imagen Sentinel-2 requiere una cuenta en
-              Copernicus Data Space (CDSE). El registro es gratuito para uso científico.
-              Una vez configurada, este panel mostraría NDVI medio, mín y máx de la zona.
-            </p>
-            <a href="https://dataspace.copernicus.eu/register" target="_blank" rel="noopener noreferrer"
-              style={{ display: "inline-block", marginTop: 8, fontSize: 12,
-                color: "#10b981", fontWeight: 600 }}>
-              Registrarse en CDSE →
-            </a>
+      {data.ndvi_mean != null ? (
+        <Card style={{ background: "#f0fdf4", border: "1px solid #86efac" }}>
+          <Label>🌿 NDVI — Índice de Vegetación</Label>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10, marginTop: 8 }}>
+            {[
+              { label: "Medio", value: data.ndvi_mean },
+              { label: "Mínimo", value: data.ndvi_min },
+              { label: "Máximo", value: data.ndvi_max },
+            ].map(({ label, value }) => (
+              <div key={label} style={{ textAlign: "center", background: "#dcfce7",
+                borderRadius: 8, padding: "10px 6px" }}>
+                <div style={{ fontSize: 20, fontWeight: 700, color: "#15803d" }}>
+                  {value?.toFixed(3)}
+                </div>
+                <div style={{ fontSize: 11, color: "#166534", marginTop: 2 }}>{label}</div>
+              </div>
+            ))}
           </div>
-        </div>
-      </Card>
+          <p style={{ fontSize: 11, color: "#166534", marginTop: 8 }}>
+            Rango: -1 (agua/suelo) → 0 (sin vegetación) → 1 (vegetación densa)
+          </p>
+        </Card>
+      ) : (
+        <Card style={{ background: "#fffbeb", border: "1px solid #fde68a" }}>
+          <div style={{ display: "flex", gap: 10 }}>
+            <span style={{ fontSize: 18 }}>💡</span>
+            <div>
+              <p style={{ fontSize: 13, fontWeight: 600, color: "#92400e", marginBottom: 6 }}>
+                NDVI no disponible para esta zona
+              </p>
+              <p style={{ fontSize: 12, color: "#78350f" }}>
+                {data.ndvi_error || "No se encontraron imágenes con menos del 30% de nubes en los últimos 30 días."}
+              </p>
+            </div>
+          </div>
+        </Card>
+      )}
 
       <p style={{ fontSize: 11, color: "#94a3b8", textAlign: "center" }}>
         Fuente: ESA Copernicus Data Space · Sentinel-2 L2A
