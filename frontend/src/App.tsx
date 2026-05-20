@@ -5,6 +5,7 @@ import maplibregl from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
 import MapPanel from "./components/MapPanel";
 import StatsPanel from "./components/StatsPanel";
+import GeoPanel from "./components/GeoPanel";
 
 const qc = new QueryClient();
 
@@ -313,7 +314,7 @@ function DetailSidebar({ a, onClose, onViewMap, onReprocess }: {
 // ─── ForestApp ────────────────────────────────────────────────────────────────
 function ForestApp() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [view, setView] = useState<"grid" | "map">("grid");
+  const [view, setView] = useState<"grid" | "map" | "geo">("grid");
 
   const { data, isLoading } = useQuery({
     queryKey: ["analyses"],
@@ -353,8 +354,8 @@ function ForestApp() {
 
         {/* Tabs */}
         <div style={{ display: "flex", gap: 4, background: "#f1f5f9", borderRadius: 12, padding: 4 }}>
-          {[{ key: "grid", icon: "⊞", label: "Ortofotos" }, { key: "map", icon: "🗺", label: "Mapa" }].map(t => (
-            <button key={t.key} onClick={() => setView(t.key as "grid" | "map")} style={{
+          {[{ key: "grid", icon: "⊞", label: "Ortofotos" }, { key: "map", icon: "🗺", label: "Mapa" }, { key: "geo", icon: "🌍", label: "Geo Servicios" }].map(t => (
+            <button key={t.key} onClick={() => setView(t.key as "grid" | "map" | "geo")} style={{
               display: "flex", alignItems: "center", gap: 6, padding: "7px 14px",
               borderRadius: 9, border: "none", cursor: "pointer", fontSize: 13, fontWeight: 600,
               background: view === t.key ? "white" : "transparent",
@@ -431,7 +432,7 @@ function ForestApp() {
               />
             )}
           </>
-        ) : (
+        ) : view === "map" ? (
           /* ── Vista mapa ── */
           <>
             {/* Mini sidebar lista */}
@@ -465,6 +466,11 @@ function ForestApp() {
               <MapPanel analysisId={selectedId} onSelectAnalysis={(id) => { setSelectedId(id); }} />
             </div>
           </>
+        ) : (
+          /* ── Vista Geo Servicios ── */
+          <div style={{ flex: 1, overflow: "hidden" }}>
+            <GeoPanel />
+          </div>
         )}
       </div>
     </div>
