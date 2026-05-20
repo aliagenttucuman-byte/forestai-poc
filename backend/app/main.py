@@ -1,6 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.api.analyses import router as analyses_router
+from app.api.geo import router as geo_router
 from app.db.models import Base
 from app.db.session import engine
 
@@ -22,6 +23,7 @@ app.add_middleware(
 )
 
 app.include_router(analyses_router)
+app.include_router(geo_router)
 
 @app.get("/health")
 def health():
