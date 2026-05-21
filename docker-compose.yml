@@ -7,6 +7,7 @@ services:
     volumes:
       - ./backend:/app
       - uploads_data:/app/uploads
+      - sam_models:/tmp/sam_models
     depends_on:
       db:
         condition: service_healthy
@@ -68,6 +69,7 @@ services:
 volumes:
   pgdata:
   uploads_data:
+  sam_models:
 
 networks:
   app-net:
