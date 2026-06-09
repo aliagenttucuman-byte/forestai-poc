@@ -11,6 +11,8 @@
     "lint": "eslint . --ext ts,tsx"
   },
   "dependencies": {
+    "@react-three/drei": "^10.7.7",
+    "@react-three/fiber": "^9.6.1",
     "@tanstack/react-query": "^5.64",
     "axios": "^1.7",
     "maplibre-gl": "^4.3.2",
@@ -18,6 +20,7 @@
     "react-dom": "^19.0",
     "react-router-dom": "^7.1",
     "tailwindcss": "^4.0",
+    "three": "^0.184.0",
     "zustand": "^4.5.2"
   },
   "devDependencies": {

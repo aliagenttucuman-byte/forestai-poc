@@ -3,6 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.api.analyses import router as analyses_router
 from app.api.geo import router as geo_router
 from app.api.v1.tree_detection import router as tree_detection_router
+from app.api.netflora import router as netflora_router
 from app.db.models import Base
 from app.db.session import engine
 
@@ -26,6 +27,7 @@ app.add_middleware(
 app.include_router(analyses_router)
 app.include_router(geo_router)
 app.include_router(tree_detection_router, prefix="/api")
+app.include_router(netflora_router)
 
 @app.get("/health")
 def health():

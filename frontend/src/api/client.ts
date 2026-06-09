@@ -27,6 +27,11 @@ export interface TreeResult {
   biomass_kg: number;
   age_years: number;
   confidence: string;
+  // Clasificación VLM (opcional — puede ser null si no se procesó)
+  vlm_species?: string | null;
+  vlm_health?: string | null;
+  vlm_confidence?: number | null;
+  vlm_notes?: string | null;
 }
 
 export interface Summary {

@@ -145,6 +145,11 @@ def get_trees(analysis_id: str, db: Session = Depends(get_db)):
             "biomass_kg": t.biomass_kg,
             "age_years": t.age_years,
             "confidence": t.confidence,
+            # Campos VLM
+            "vlm_species": t.vlm_species,
+            "vlm_health": t.vlm_health,
+            "vlm_confidence": t.vlm_confidence,
+            "vlm_notes": t.vlm_notes,
         }
         for t in trees
     ]
@@ -262,6 +267,10 @@ def get_tree_detail(analysis_id: str, tree_id: str, db: Session = Depends(get_db
         g_mean=tree.g_mean,
         b_mean=tree.b_mean,
         texture_score=tree.texture_score,
+        vlm_species=tree.vlm_species,
+        vlm_health=tree.vlm_health,
+        vlm_confidence=tree.vlm_confidence,
+        vlm_notes=tree.vlm_notes,
     )
 
 

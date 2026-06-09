@@ -5,7 +5,7 @@ celery_app = Celery(
     "forestai",
     broker=settings.REDIS_URL,
     backend=settings.REDIS_URL,
-    include=["app.tasks.analysis_task"],
+    include=["app.tasks.analysis_task", "app.tasks.netflora_task", "app.tasks.tree_detection_task"],
 )
 
 celery_app.conf.update(

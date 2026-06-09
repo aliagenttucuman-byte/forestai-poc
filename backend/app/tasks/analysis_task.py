@@ -1,11 +1,16 @@
+import asyncio
+import os
 from datetime import datetime
 from app.tasks.celery_app import celery_app
 from app.db.session import SessionLocal
 from app.db import models
 from app.services.forest_analyzer import analyze_ortophoto
+from app.services.vlm_classifier import classify_trees_vlm
 import json
+import numpy as np
+from PIL import Image
 
-@celery_app.task(bind=True)
+@celery_app.task(bind=True, time_limit=7200, soft_time_limit=6900)
 def run_analysis(self, analysis_id: str, filepath: str):
     db = SessionLocal()
     try:
@@ -67,6 +72,84 @@ def run_analysis(self, analysis_id: str, filepath: str):
             db.add(db_tree)
 
         db.commit()
+
+        # --- Clasificación VLM (opcional) ---
+        nvidia_key = (os.getenv("OPENCODE_API_KEY", "") or os.getenv("NVIDIA_API_KEY", "")).strip()
+        if nvidia_key:
+            progress_callback(83, "Clasificando árboles con Vision LLM...")
+            try:
+                # Cargar la imagen original para los crops
+                # TIFs forestales pueden ser muy grandes — desactivar límite PIL
+                Image.MAX_IMAGE_PIXELS = None
+                image_arr = np.array(Image.open(filepath).convert("RGB"))
+                H, W = image_arr.shape[:2]
+
+                # Convertir lat/lon a coordenadas pixel (aproximado, escala lineal)
+                lats = [t["centroid_lat"] for t in trees_data]
+                lons = [t["centroid_lon"] for t in trees_data]
+                lat_min, lat_max = min(lats), max(lats)
+                lon_min, lon_max = min(lons), max(lons)
+
+                trees_px = []
+                for t in trees_data:
+                    # crown_area_m2 → radio px (aprox)
+                    import math
+                    r_deg = math.sqrt(t.get("crown_area_m2", 16)) / 111_000
+                    lat_range = lat_max - lat_min or 1e-6
+                    lon_range = lon_max - lon_min or 1e-6
+                    cx = int((t["centroid_lon"] - lon_min) / lon_range * (W - 1))
+                    cy = int((1 - (t["centroid_lat"] - lat_min) / lat_range) * (H - 1))
+                    r_px = max(15, int(r_deg / lon_range * W))
+                    trees_px.append({
+                        "xmin": max(0, cx - r_px),
+                        "ymin": max(0, cy - r_px),
+                        "xmax": min(W, cx + r_px),
+                        "ymax": min(H, cy + r_px),
+                    })
+
+                # Celery también corre con event loop activo en algunos configs.
+                # Usamos thread separado para evitar "cannot be called from a running event loop".
+                import concurrent.futures
+
+                def _run_vlm_celery():
+                    loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(loop)
+                    try:
+                        return loop.run_until_complete(
+                            classify_trees_vlm(image_arr, trees_px, nvidia_key)
+                        )
+                    finally:
+                        loop.close()
+
+                with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+                    vlm_results = pool.submit(_run_vlm_celery).result(timeout=120)
+
+                # Aplicar resultados a la BD
+                db_trees = db.query(models.Tree).filter(
+                    models.Tree.analysis_id == analysis_id
+                ).all()
+                tree_by_id = {t.id: t for t in db_trees}
+
+                for vlm in vlm_results:
+                    if not vlm.get("vlm_ok"):
+                        continue
+                    idx = vlm["tree_idx"]
+                    tree_id = f"{analysis_id[:8]}-{trees_data[idx]['tree_id']}"
+                    if tree_id in tree_by_id:
+                        db_t = tree_by_id[tree_id]
+                        db_t.vlm_species    = vlm.get("vlm_species")
+                        db_t.vlm_health     = vlm.get("vlm_health")
+                        db_t.vlm_confidence = vlm.get("vlm_confidence")
+                        db_t.vlm_notes      = vlm.get("vlm_notes")
+
+                db.commit()
+                ok_count = sum(1 for v in vlm_results if v.get("vlm_ok"))
+                progress_callback(90, f"VLM: {ok_count}/{len(trees_data)} árboles clasificados")
+            except Exception as vlm_exc:
+                # VLM es opcional — no fallar el análisis por esto
+                import logging
+                logging.getLogger(__name__).warning(f"VLM classification failed (non-fatal): {vlm_exc}")
+                progress_callback(90, "VLM: clasificación omitida (ver logs)")
 
         # Completar
         analysis.status = models.AnalysisStatus.completed

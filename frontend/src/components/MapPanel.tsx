@@ -287,6 +287,45 @@ export default function MapPanel({ analysisId, onSelectAnalysis }: Props) {
               </div>
             ))}
           </div>
+
+          {/* ── VLM ── */}
+          {(selectedTree.vlm_species || selectedTree.vlm_health) && (
+            <div style={{ marginTop: 10, borderTop: "1px solid #e2e8f0", paddingTop: 10 }}>
+              <p style={{ fontSize: 10, fontWeight: 700, color: "#7c3aed", textTransform: "uppercase",
+                letterSpacing: "0.07em", marginBottom: 6 }}>🤖 Visión IA</p>
+              <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                {selectedTree.vlm_species && (
+                  <div style={{ display: "flex", justifyContent: "space-between" }}>
+                    <span style={{ fontSize: 11, color: "#64748b" }}>Especie</span>
+                    <span style={{ fontSize: 11, fontWeight: 700, color: "#1e293b" }}>{selectedTree.vlm_species}</span>
+                  </div>
+                )}
+                {selectedTree.vlm_health && (
+                  <div style={{ display: "flex", justifyContent: "space-between" }}>
+                    <span style={{ fontSize: 11, color: "#64748b" }}>Salud</span>
+                    <span style={{ fontSize: 11, fontWeight: 700, color:
+                      selectedTree.vlm_health === "saludable" ? "#059669" :
+                      selectedTree.vlm_health === "estresado" ? "#f59e0b" :
+                      selectedTree.vlm_health === "enfermo"   ? "#ef4444" : "#94a3b8"
+                    }}>{selectedTree.vlm_health}</span>
+                  </div>
+                )}
+                {selectedTree.vlm_confidence != null && (
+                  <div style={{ display: "flex", justifyContent: "space-between" }}>
+                    <span style={{ fontSize: 11, color: "#64748b" }}>Confianza VLM</span>
+                    <span style={{ fontSize: 11, fontWeight: 700, color: "#1e293b" }}>
+                      {(selectedTree.vlm_confidence * 100).toFixed(0)}%
+                    </span>
+                  </div>
+                )}
+                {selectedTree.vlm_notes && (
+                  <p style={{ fontSize: 10, color: "#64748b", fontStyle: "italic", marginTop: 2 }}>
+                    {selectedTree.vlm_notes}
+                  </p>
+                )}
+              </div>
+            </div>
+          )}
         </div>
       )}
 

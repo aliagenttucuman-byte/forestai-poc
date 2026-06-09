@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect, useCallback } from "react";
+import { useForestStore } from "../store/useForestStore";
 
 const API_BASE = import.meta.env.VITE_API_URL || "";
 
@@ -11,6 +12,11 @@ interface TreeBox {
   polygon?: number[][];
   sam_score?: number;
   stability_score?: number;
+  // VLM
+  vlm_species?: string | null;
+  vlm_health?: string | null;
+  vlm_confidence?: number | null;
+  vlm_notes?: string | null;
 }
 
 interface DetectionResult {
@@ -21,6 +27,7 @@ interface DetectionResult {
   annotated_image_b64: string;
   used_sample: boolean;
   sam_used: boolean;
+  vlm_used: boolean;
   sample_name: string;
 }
 
@@ -309,6 +316,51 @@ function TreeDetailPanel({ tree }: { tree: TreeBox | null }) {
               }} />
             </div>
           </div>
+
+          {/* VLM */}
+          {(tree.vlm_species || tree.vlm_health) && (
+            <div style={{ marginTop: 14, borderTop: "1px solid #e2e8f0", paddingTop: 12 }}>
+              <p style={{ fontSize: 10, fontWeight: 700, color: "#7c3aed",
+                textTransform: "uppercase", letterSpacing: "0.07em", marginBottom: 8 }}>
+                🤖 Visión IA
+              </p>
+              <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                {tree.vlm_species && (
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center",
+                    padding: "5px 8px", background: "#faf5ff", borderRadius: 8 }}>
+                    <span style={{ fontSize: 11, color: "#6d28d9" }}>Especie</span>
+                    <span style={{ fontSize: 11, fontWeight: 700, color: "#1e293b" }}>{tree.vlm_species}</span>
+                  </div>
+                )}
+                {tree.vlm_health && (
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center",
+                    padding: "5px 8px", background: "#faf5ff", borderRadius: 8 }}>
+                    <span style={{ fontSize: 11, color: "#6d28d9" }}>Salud</span>
+                    <span style={{ fontSize: 11, fontWeight: 700, color:
+                      tree.vlm_health === "saludable" ? "#059669" :
+                      tree.vlm_health === "estresado" ? "#f59e0b" :
+                      tree.vlm_health === "enfermo"   ? "#ef4444" : "#94a3b8"
+                    }}>{tree.vlm_health}</span>
+                  </div>
+                )}
+                {tree.vlm_confidence != null && (
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center",
+                    padding: "5px 8px", background: "#faf5ff", borderRadius: 8 }}>
+                    <span style={{ fontSize: 11, color: "#6d28d9" }}>Confianza VLM</span>
+                    <span style={{ fontSize: 11, fontWeight: 700, color: "#1e293b" }}>
+                      {(tree.vlm_confidence * 100).toFixed(0)}%
+                    </span>
+                  </div>
+                )}
+                {tree.vlm_notes && (
+                  <p style={{ fontSize: 10, color: "#64748b", fontStyle: "italic",
+                    margin: "2px 0 0", lineHeight: 1.4 }}>
+                    {tree.vlm_notes}
+                  </p>
+                )}
+              </div>
+            </div>
+          )}
         </>
       ) : (
         <div style={{
@@ -332,9 +384,41 @@ export default function TreeDetectionPanel() {
   const [error, setError] = useState<string | null>(null);
   const [dragging, setDragging] = useState(false);
   const [hoveredTree, setHoveredTree] = useState<TreeBox | null>(null);
-  const [thresholdDeep, setThresholdDeep] = useState(0.4);
+  const [thresholdDeep, setThresholdDeep] = useState(0.15);
   const [thresholdSam, setThresholdSam] = useState(0.85);
   const [thresholdStability, setThresholdStability] = useState(0.9);
+  const setDetectedTrees = useForestStore((s) => s.setDetectedTrees);
+
+  // Helper: convierte DetectionResult al formato del store 3D
+  const dispatchTo3D = (r: DetectionResult) => {
+    const scale = 60 / Math.max(r.image_width, r.image_height);
+    const trees3D = r.trees.map((t, i) => {
+      const cx = ((t.xmin + t.xmax) / 2) * scale;
+      const cy = ((t.ymin + t.ymax) / 2) * scale;
+      const crownPx = Math.max(t.xmax - t.xmin, t.ymax - t.ymin);
+      const crownM = crownPx * scale;
+      const vlm = t.vlm_health?.toLowerCase() ?? "";
+      const health = vlm.includes("sano") || vlm.includes("healthy")
+        ? "sano"
+        : vlm.includes("estres") || vlm.includes("stress")
+        ? "estresado"
+        : vlm.includes("muerto") || vlm.includes("dead")
+        ? "muerto"
+        : "unknown";
+      return {
+        id: `ARB-${String(i + 1).padStart(3, "0")}`,
+        x: cx,
+        y: cy,
+        crown_diameter: Math.max(0.5, crownM),
+        health_status: health,
+        species: t.vlm_species ?? undefined,
+        score: t.score,
+        vlm_health: t.vlm_health,
+        vlm_species: t.vlm_species,
+      };
+    });
+    setDetectedTrees(trees3D, r.image_width, r.image_height);
+  };
 
   const runSample = async () => {
     setLoading(true);
@@ -343,10 +427,13 @@ export default function TreeDetectionPanel() {
     try {
       const res = await fetch(`${API_BASE}/api/tree-detection/run`, { method: "POST" });
       if (!res.ok) {
-        const err = await res.json();
-        throw new Error(err.detail || "Error en el servidor");
+        let errMsg = "Error en el servidor";
+        try { const err = await res.json(); errMsg = err.detail || errMsg; } catch { errMsg = await res.text().catch(() => errMsg); }
+        throw new Error(errMsg);
       }
-      setResult(await res.json());
+      const data: DetectionResult = await res.json();
+      setResult(data);
+      dispatchTo3D(data);
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : "Error desconocido");
     } finally {
@@ -361,15 +448,40 @@ export default function TreeDetectionPanel() {
     try {
       const form = new FormData();
       form.append("file", file);
+      // 1. Encolar tarea — responde inmediato con task_id
       const res = await fetch(`${API_BASE}/api/tree-detection/upload`, { method: "POST", body: form });
       if (!res.ok) {
-        const err = await res.json();
-        throw new Error(err.detail || "Error en el servidor");
+        let errMsg = "Error en el servidor";
+        try { const err = await res.json(); errMsg = err.detail || errMsg; } catch { errMsg = await res.text().catch(() => errMsg); }
+        throw new Error(errMsg);
       }
-      setResult(await res.json());
+      const queued = await res.json();
+      const taskId = queued.task_id;
+      if (!taskId) throw new Error("No se recibió task_id del servidor");
+
+      // 2. Polling cada 5 segundos hasta SUCCESS o FAILURE
+      const poll = async (): Promise<void> => {
+        const statusRes = await fetch(`${API_BASE}/api/tree-detection/status/${taskId}`);
+        const statusData = await statusRes.json();
+
+        if (statusData.status === "SUCCESS") {
+          setResult(statusData);
+          dispatchTo3D(statusData);
+          setLoading(false);
+        } else if (statusData.status === "FAILURE") {
+          throw new Error(statusData.error || "La detección falló");
+        } else {
+          // PENDING o PROGRESS — seguir esperando
+          setTimeout(() => poll().catch(err => {
+            setError(err instanceof Error ? err.message : "Error desconocido");
+            setLoading(false);
+          }), 5000);
+        }
+      };
+
+      await poll();
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : "Error desconocido");
-    } finally {
       setLoading(false);
     }
   };
@@ -418,6 +530,15 @@ export default function TreeDetectionPanel() {
             padding: "4px 12px", borderRadius: 20, display: "flex", alignItems: "center", gap: 6,
           }}>
             <span>✦</span> SAM activo
+          </div>
+        )}
+        {result?.vlm_used && (
+          <div style={{
+            background: "linear-gradient(135deg, #7c3aed, #a78bfa)",
+            color: "white", fontSize: 11, fontWeight: 700,
+            padding: "4px 12px", borderRadius: 20, display: "flex", alignItems: "center", gap: 6,
+          }}>
+            <span>🤖</span> VLM activo
           </div>
         )}
       </div>
@@ -487,7 +608,7 @@ export default function TreeDetectionPanel() {
             {[
               { step: "1", text: "DeepForest detecta copas con RetinaNet" },
               { step: "2", text: "SAM refina cada copa en máscara poligonal" },
-              { step: "3", text: "Polígonos interactivos con score de confianza" },
+              { step: "3", text: "VLM clasifica especie y salud por copa" },
             ].map(({ step, text }) => (
               <div key={step} style={{ display: "flex", gap: 10, marginBottom: 8, alignItems: "flex-start" }}>
                 <div style={{
@@ -591,22 +712,28 @@ export default function TreeDetectionPanel() {
           {loading && !result && (
             <div style={{
               background: "white", borderRadius: 16, border: "1px solid #e2e8f0",
-              padding: 60, display: "flex", flexDirection: "column",
-              alignItems: "center", justifyContent: "center", gap: 16,
+              padding: "80px 40px", display: "flex", flexDirection: "column",
+              alignItems: "center", justifyContent: "center", gap: 20,
             }}>
-              <div style={{
-                width: 48, height: 48, border: "3px solid #10b981",
-                borderTopColor: "transparent", borderRadius: "50%",
-                animation: "spin 0.8s linear infinite",
-              }} />
-              <div style={{ textAlign: "center" }}>
-                <p style={{ fontSize: 15, fontWeight: 600, color: "#0f172a", margin: 0 }}>
-                  DeepForest + SAM analizando...
-                </p>
-                <p style={{ fontSize: 13, color: "#64748b", margin: "6px 0 0" }}>
-                  Primera vez ~60 seg · descarga de modelos
-                </p>
+              <div style={{ position: "relative", width: 80, height: 80 }}>
+                <div style={{
+                  position: "absolute", inset: 0,
+                  border: "3px solid #d1fae5", borderTopColor: "#10b981",
+                  borderRadius: "50%", animation: "spin 1s linear infinite",
+                }} />
+                <div style={{
+                  position: "absolute", inset: 8,
+                  border: "2px solid #a7f3d0", borderTopColor: "#059669",
+                  borderRadius: "50%", animation: "spin 1.5s linear infinite reverse",
+                }} />
+                <div style={{
+                  position: "absolute", inset: 0,
+                  display: "flex", alignItems: "center", justifyContent: "center", fontSize: 28,
+                }}>🌲</div>
               </div>
+              <p style={{ fontSize: 15, fontWeight: 600, color: "#64748b", margin: 0 }}>
+                Procesando...
+              </p>
             </div>
           )}
 

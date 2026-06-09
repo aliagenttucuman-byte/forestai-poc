@@ -58,6 +58,11 @@ class TreeDetail(TreeProperties):
     g_mean: Optional[float]
     b_mean: Optional[float]
     texture_score: Optional[float]
+    # Clasificación Vision LLM (None si no se ejecutó o falló)
+    vlm_species: Optional[str] = None
+    vlm_health: Optional[str] = None
+    vlm_confidence: Optional[float] = None
+    vlm_notes: Optional[str] = None
 
 class SpeciesDistribution(BaseModel):
     species: str

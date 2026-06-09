@@ -51,3 +51,5 @@ htmlcov/
 /blob-report/
 /playwright/.cache/
 uploads/
+backend/netflora_repo/
+netflora_repo/

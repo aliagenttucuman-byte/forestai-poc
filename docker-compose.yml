@@ -8,6 +8,9 @@ services:
       - ./backend:/app
       - uploads_data:/app/uploads
       - sam_models:/tmp/sam_models
+      - ./netflora_repo:/app/netflora_repo:ro
+      - netflora_models:/app/netflora_models
+      - hf_cache:/root/.cache/huggingface
     depends_on:
       db:
         condition: service_healthy
@@ -15,7 +18,7 @@ services:
         condition: service_started
     networks:
       - app-net
-    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 2 --timeout-keep-alive 300
 
   celery_worker:
     build: ./backend
@@ -23,6 +26,10 @@ services:
     volumes:
       - ./backend:/app
       - uploads_data:/app/uploads
+      - ./netflora_repo:/app/netflora_repo:ro
+      - netflora_models:/app/netflora_models
+      - hf_cache:/root/.cache/huggingface
+      - sam_models:/tmp/sam_models
     depends_on:
       db:
         condition: service_healthy
@@ -70,6 +77,8 @@ volumes:
   pgdata:
   uploads_data:
   sam_models:
+  netflora_models:
+  hf_cache:
 
 networks:
   app-net:
